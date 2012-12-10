@@ -10,12 +10,9 @@
  ******************************************************************************/
 package org.jboss.tools.openshift.express.internal.core.connection;
 
-import java.io.UnsupportedEncodingException;
-import java.net.MalformedURLException;
-import java.net.URL;
+import java.io.IOException;
 
 import org.jboss.tools.openshift.express.internal.core.util.UrlUtils;
-import org.jboss.tools.openshift.express.internal.core.util.UrlUtils.UrlPortions;
 import org.jboss.tools.openshift.express.internal.ui.preferences.OpenShiftPreferences;
 import org.jboss.tools.openshift.express.internal.ui.utils.Logger;
 import org.jboss.tools.openshift.express.internal.ui.utils.StringUtils;
@@ -30,40 +27,6 @@ public class ConnectionUtils {
 
 	private ConnectionUtils() {
 		// inhibit instantiation
-	}
-
-	public static String getUrlForUsername(String username) throws UnsupportedEncodingException, MalformedURLException {
-		if (StringUtils.isEmpty(username)) {
-			return null;
-		}
-		UrlPortions portions = UrlUtils.toPortions(getDefaultHostUrl());
-		return UrlUtils.getUrlFor(username, null, portions.getProtocol() + UrlUtils.SCHEME_SEPARATOR);
-	}
-
-	public static String getUrlForUsernameAndHost(String username, String host) throws UnsupportedEncodingException {
-		String scheme = UrlUtils.SCHEME_HTTPS;
-		if (isDefaultHost(host)) {
-			scheme = UrlUtils.ensureStartsWithSchemeOrHttps(UrlUtils.getScheme(host));
-			host = null;
-		} else if (UrlUtils.hasScheme(host)) {
-			scheme = UrlUtils.getScheme(host);
-			host = UrlUtils.cutScheme(host);
-		}
-		return UrlUtils.getUrlFor(username, host, scheme);
-	}
-
-	/**
-	 * @return an url-alike string that always starts with a scheme but
-	 *         eventually has no host where the default host shall be used.
-	 * @throws UnsupportedEncodingException
-	 */
-	public static String getUrlForConnection(Connection connection) throws UnsupportedEncodingException {
-		String username = connection.getUsername();
-		String host = connection.getHost();
-		if (isDefaultHost(host)) {
-			host = null;
-		}
-		return UrlUtils.toUrlString(username, host, connection.getScheme());
 	}
 
 	/**
@@ -83,7 +46,7 @@ public class ConnectionUtils {
 				return defaultHost;
 			}
 			return new OpenShiftConfiguration().getLibraServer();
-		} catch (Exception e) {
+		} catch (IOException e) {
 			Logger.error("Could not load default server from OpenShift configuration.", e);
 		}
 		return null;
@@ -103,24 +66,8 @@ public class ConnectionUtils {
 	 * @see getDefaultHost()
 	 */
 	public static boolean isDefaultHost(String host) {
-		return isEmptyHost(host)
-				|| getDefaultHostUrl().equals(UrlUtils.ensureStartsWithSchemeOrHttps(host));
-	}
-
-	/**
-	 * Returns <code>true</code> if the given host is an empty string or is an
-	 * url with an empty host portion.
-	 * 
-	 * @param host
-	 *            the host to check whether it is empty
-	 * @return true if empty string or url without a host portion
-	 */
-	public static boolean isEmptyHost(String host) {
-		try {
-			return StringUtils.isEmpty(host)
-					|| new URL(UrlUtils.ensureStartsWithSchemeOrHttps(host)).getHost().isEmpty();
-		} catch (MalformedURLException e) {
-			return false;
-		}
+		return UrlUtils.isEmptyHost(host)
+				|| getDefaultHostUrl().equals(
+						UrlUtils.ensureStartsWithScheme(host, UrlUtils.SCHEME_HTTPS));
 	}
 }

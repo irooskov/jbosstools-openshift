@@ -10,16 +10,10 @@
  ******************************************************************************/
 package org.jboss.tools.openshift.express.internal.core.connection;
 
-import java.io.FileNotFoundException;
-import java.io.IOException;
-import java.io.UnsupportedEncodingException;
-import java.net.MalformedURLException;
 import java.net.SocketTimeoutException;
-import java.net.URL;
 import java.util.List;
 
 import org.jboss.tools.openshift.express.internal.core.util.UrlUtils;
-import org.jboss.tools.openshift.express.internal.core.util.UrlUtils.UrlPortions;
 import org.jboss.tools.openshift.express.internal.ui.OpenShiftUIActivator;
 import org.jboss.tools.openshift.express.internal.ui.preferences.OpenShiftPreferences;
 import org.jboss.tools.openshift.express.internal.ui.utils.Logger;
@@ -40,7 +34,6 @@ import com.openshift.client.IUser;
 import com.openshift.client.OpenShiftConnectionFactory;
 import com.openshift.client.OpenShiftException;
 import com.openshift.client.OpenShiftUnknonwSSHKeyTypeException;
-import com.openshift.client.configuration.OpenShiftConfiguration;
 
 /**
  * @author Rob Stryker
@@ -58,69 +51,60 @@ public class Connection {
 	private IUser user;
 	private boolean isDomainLoaded;
 	private boolean rememberPassword;
-	private boolean alreadyPromptedForPassword;
+	private boolean didPromptForPassword;
 	private boolean passwordLoaded;
-	private OpenShiftConfiguration openShiftConfiguration;
 	private ICredentialsPrompter prompter;
 
 	public Connection() {
-		this(null, null, null, false);
+		this(null, null, null, null, false, null);
 	}
 
-	public Connection(String username) {
+	protected Connection(String username) {
 		this.username = username;
 	}
 
-	public Connection(String username, String host) {
-		this.username = username;
-		setHost(host);
-	}
-
-	public Connection(URL url, ICredentialsPrompter prompter) throws MalformedURLException,
-			UnsupportedEncodingException {
-		UrlPortions portions = UrlUtils.toPortions(url);
-		this.username = portions.getUsername();
-		this.password = portions.getPassword();
-		setHost(portions.getProtocol() + UrlUtils.SCHEME_SEPARATOR + portions.getHost());
+	public Connection(String username, String scheme, String host, ICredentialsPrompter prompter) {
+		this(username, null, scheme, host, false, null);
 		this.prompter = prompter;
 	}
 
-	public Connection(Connection connection) {
-		this(connection.getUsername(), connection.getPassword(), connection.getHost(),
-				connection.isRememberPassword());
-		setUser(connection.getUser());
+	public Connection(String username, String host, ICredentialsPrompter prompter) {
+		this(username, null, host, false);
+		this.prompter = prompter;
 	}
 
-	private Connection(String username, String password, String host, boolean rememberPassword) {
-		this.username = getUsername(username);
+	public Connection(String username, String password, boolean rememberPassword) {
+		this(username, password, null, rememberPassword);
+	}
+
+	public Connection(String username, String password, String host, boolean rememberPassword) {
+		this(username, password, host, rememberPassword, null);
+	}
+	
+	protected Connection(String username, String password, String host, boolean rememberPassword, IUser user) {
+		this(username, password, UrlUtils.getScheme(host), UrlUtils.cutScheme(host), rememberPassword, user);
+	}
+
+	protected Connection(String username, String password, String scheme, String host, boolean rememberPassword, IUser user) {
+		this.username = username;
 		this.password = password;
-		setHost(host);
+		this.host = getHost(scheme, host);
 		this.rememberPassword = rememberPassword;
+		setUser(user);
 	}
 
-	private String getUsername(String username) {
-		if (!StringUtils.isEmpty(username)) {
-			return username;
+	private String getHost(String scheme, String host) {
+		if (StringUtils.isEmpty(host)) {
+			return host;
 		}
-		return getDefaultUsername();
+		
+		if (StringUtils.isEmpty(scheme)) {
+			scheme = UrlUtils.SCHEME_HTTPS;
+		}
+		return UrlUtils.ensureStartsWithScheme(host, scheme);
 	}
 
-	private String getDefaultUsername() {
-		String username = OpenShiftPreferences.INSTANCE.getLastUsername();
-		if (StringUtils.isEmpty(username)) {
-			try {
-				username = getOpenShiftConfiguration().getRhlogin();
-			} catch (Exception e) {
-				Logger.error("Could not load default user name from OpenShift configuration.", e);
-			}
-		}
-		return username;
-	}
-
-	private void setUser(IUser user) {
-		if (user == null) {
-			return;
-		}
+	protected void setUser(IUser user) {
 		this.user = user;
 	}
 
@@ -146,7 +130,7 @@ public class Connection {
 
 	public String setPassword(String password) {
 		this.password = password;
-		setRememberPassword(!StringUtils.isEmpty(password));
+		// setRememberPassword(!StringUtils.isEmpty(password));
 		this.passwordLoaded = true;
 		clearUser();
 		return password;
@@ -161,35 +145,32 @@ public class Connection {
 		if (isDefaultHost()) {
 			return ConnectionUtils.getDefaultHostUrl();
 		}
-
 		return host;
 	}
 
-	/**
-	 * Returns the scheme of this connections. Returns https by default;
-	 * @return
-	 */
 	public String getScheme() {
-		String scheme = UrlUtils.getScheme(getHost());
-		if (StringUtils.isEmpty(scheme)) {
-			scheme = UrlUtils.HTTPS;
+		if (isDefaultHost()) {
+			return UrlUtils.getScheme(ConnectionUtils.getDefaultHostUrl());
 		}
-		return scheme;
+
+		return UrlUtils.getScheme(host);
 	}
-	
+
 	public String setHost(String host) {
-		if (!UrlUtils.hasScheme(host)) {
-			host = UrlUtils.SCHEME_HTTPS + StringUtils.null2emptyString(host);
-		}
-		this.host = host;
+		this.host = UrlUtils.ensureStartsWithScheme(host, UrlUtils.SCHEME_HTTPS);
 		clearUser();
 		return host;
 	}
 
-	private boolean isDefaultHost() {
-		return 	ConnectionUtils.isDefaultHost(host);
+	public boolean isDefaultHost() {
+		return isDefaultHost(host);
 	}
 
+	private boolean isDefaultHost(String host) {
+		return host == null
+				|| UrlUtils.cutScheme(host).isEmpty();
+	}
+	
 	public boolean isRememberPassword() {
 		return rememberPassword;
 	}
@@ -199,26 +180,51 @@ public class Connection {
 	}
 
 	public boolean canPromptForPassword() {
-		return this.alreadyPromptedForPassword == false;
+		return this.didPromptForPassword == false;
 	}
 
 	/**
-	 * Prompts user for password if it was not given or retrieved from secure
-	 * storage before.
+	 * Connects to OpenShift. Will do nothing if this connection is already
+	 * connected.
 	 * 
-	 * @return true if user entered credentials, false otherwise.
+	 * @return <code>true</code> if connect succeeed, <code>false</code>
+	 *         otherwise
+	 * @throws OpenShiftException
 	 */
-	private boolean authenticate() {
-		if (!hasUser()) {
-			loadPassword();
-			if (password != null) {
-				if (createUser()) {
-					return true;
-				}
-			}
-			return promptForCredentials();
+	public boolean connect() throws OpenShiftException {
+		if (isConnected()) {
+			save();
+			return true;
 		}
-		return true;
+		if (createUser()) {
+			save();
+			return true;
+		} else {
+			return false;
+		}
+	}
+
+	/**
+	 * Creates an OpenShift user instance for this connection. Prompts for
+	 * credentials if needed.
+	 * 
+	 * @return <code>true</code> if user could get created, <code>false</code>
+	 *         otherwise.
+	 */
+	protected boolean createUser() {
+		loadPassword();
+		if (password == null) {
+			return promptForCredentials();
+		} else {
+			IUser user = new OpenShiftConnectionFactory().getConnection(USER_ID, username, password, getHost())
+					.getUser();
+			// force domain loading so that there is no 'lazy domain
+			// loading' cost
+			// after that.
+			user.getDefaultDomain();
+			setUser(user);
+			return true;
+		}
 	}
 
 	/**
@@ -238,34 +244,31 @@ public class Connection {
 		return user != null;
 	}
 
-	private void clearUser() {
+	protected void clearUser() {
 		this.user = null;
 	}
 
-	private boolean createUser() throws OpenShiftException {
-		this.user = new OpenShiftConnectionFactory().getConnection(USER_ID, username, password, getHost()).getUser();
-		// force domain loading so that there is no 'lazy domain loading' cost
-		// after that.
-		user.getDefaultDomain();
-		setUser(user);
-		return user != null;
-	}
-
 	public void update(Connection connection) {
+		if (connection == null) {
+			return;
+		}
 		setUsername(connection.getUsername());
 		setPassword(connection.getPassword());
 		setRememberPassword(connection.isRememberPassword());
-		setHost(connection.getHost());
+		if (connection.isDefaultHost()) {
+			setHost(null);
+		} else {
+			setHost(connection.getHost());
+		}
 		setUser(connection.getUser());
 	}
 
-	// TODO: extract UI related code from core package
 	private boolean promptForCredentials() {
 		if (prompter == null) {
 			return false;
 		}
 		try {
-			alreadyPromptedForPassword = true;
+			didPromptForPassword = true;
 			prompter.promptAndAuthenticate(this);
 		} catch (Exception e) {
 			Logger.error("Failed to retrieve User's password", e);
@@ -276,7 +279,7 @@ public class Connection {
 	public IApplication createApplication(final String applicationName, final ICartridge applicationType,
 			final ApplicationScale scale, final IGearProfile gearProfile)
 			throws OpenShiftException {
-		if (authenticate()) {
+		if (connect()) {
 			return user.getDefaultDomain().createApplication(applicationName, applicationType, scale, gearProfile);
 		}
 		return null;
@@ -292,14 +295,14 @@ public class Connection {
 	 * @throws SocketTimeoutException
 	 */
 	public IDomain createDomain(String id) throws OpenShiftException {
-		if (authenticate()) {
+		if (connect()) {
 			return user.createDomain(id);
 		}
 		return null;
 	}
 
 	public IApplication getApplicationByName(String name) throws OpenShiftException {
-		if (authenticate()
+		if (connect()
 				&& user.hasDomain()) {
 			return user.getDefaultDomain().getApplicationByName(name);
 		}
@@ -307,7 +310,7 @@ public class Connection {
 	}
 
 	public List<IApplication> getApplications() throws OpenShiftException {
-		if (authenticate()
+		if (connect()
 				&& user.hasDomain()) {
 			return user.getDefaultDomain().getApplications();
 		}
@@ -315,14 +318,18 @@ public class Connection {
 	}
 
 	public List<ICartridge> getStandaloneCartridgeNames() throws OpenShiftException {
-		if (authenticate()) {
+		if (connect()) {
 			return user.getConnection().getStandaloneCartridges();
 		}
 		return null;
 	}
 
+	public void load() {
+		getDefaultDomain();
+	}
+
 	public IDomain getDefaultDomain() throws OpenShiftException {
-		if (authenticate()) {
+		if (connect()) {
 			IDomain domain = user.getDefaultDomain();
 			isDomainLoaded = true;
 			return domain;
@@ -330,19 +337,19 @@ public class Connection {
 		return null;
 	}
 
-	public boolean isDomainLoaded() throws OpenShiftException {
+	public boolean isLoaded() throws OpenShiftException {
 		return isDomainLoaded;
 	}
 
 	public List<IEmbeddableCartridge> getEmbeddableCartridges() throws OpenShiftException {
-		if (authenticate()) {
+		if (connect()) {
 			return user.getConnection().getEmbeddableCartridges();
 		}
 		return null;
 	}
 
 	public boolean hasApplication(String name) throws OpenShiftException {
-		if (authenticate()) {
+		if (connect()) {
 			return user.getDefaultDomain().hasApplicationByName(name);
 		}
 		return false;
@@ -362,21 +369,9 @@ public class Connection {
 		return false;
 	}
 
-	public boolean connect() throws OpenShiftException {
-		if (isConnected()) {
-			return true;
-		}
-		if (authenticate()) {
-			save();
-			return true;
-		} else {
-			return false;
-		}
-	}
-
 	public void refresh() throws OpenShiftException {
 		isDomainLoaded = false;
-		if (authenticate()) {
+		if (connect()) {
 			user.refresh();
 		}
 	}
@@ -386,7 +381,7 @@ public class Connection {
 	}
 
 	public List<IOpenShiftSSHKey> getSSHKeys() {
-		if (authenticate()) {
+		if (connect()) {
 			return user.getSSHKeys();
 		}
 		return null;
@@ -394,27 +389,31 @@ public class Connection {
 
 	public IOpenShiftSSHKey getSSHKeyByPublicKey(String publicKey) throws OpenShiftUnknonwSSHKeyTypeException,
 			OpenShiftException {
-		return user.getSSHKeyByPublicKey(publicKey);
+		if (connect()) {
+			return user.getSSHKeyByPublicKey(publicKey);
+		}
+		return null;
 	}
 
 	public IOpenShiftSSHKey putSSHKey(String name, ISSHPublicKey key) throws OpenShiftException {
-		return user.putSSHKey(name, key);
+		if (connect()) {
+			return user.putSSHKey(name, key);
+		}
+		return null;
 	}
 
 	public boolean hasSSHKeyName(String name) {
-		return user.hasSSHKeyName(name);
+		if (connect()) {
+			return user.hasSSHKeyName(name);
+		}
+		return false;
 	}
 
 	public boolean hasSSHPublicKey(String publicKey) {
-		return user.hasSSHPublicKey(publicKey);
-	}
-
-	private OpenShiftConfiguration getOpenShiftConfiguration() throws FileNotFoundException, OpenShiftException,
-			IOException {
-		if (openShiftConfiguration == null) {
-			this.openShiftConfiguration = new OpenShiftConfiguration();
+		if (connect()) {
+			return user.hasSSHPublicKey(publicKey);
 		}
-		return openShiftConfiguration;
+		return false;
 	}
 
 	public void save() {

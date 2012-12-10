@@ -14,6 +14,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
+import java.util.regex.Pattern;
 
 import org.eclipse.core.resources.IFolder;
 import org.eclipse.core.resources.IProject;
@@ -38,6 +39,9 @@ import org.eclipse.jface.window.Window;
 import org.eclipse.jface.wizard.IWizardContainer;
 import org.eclipse.jface.wizard.WizardDialog;
 import org.eclipse.jface.wizard.WizardPage;
+import org.eclipse.jgit.lib.Repository;
+import org.eclipse.jgit.transport.RemoteConfig;
+import org.eclipse.osgi.util.NLS;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.events.ModifyEvent;
 import org.eclipse.swt.events.ModifyListener;
@@ -61,20 +65,23 @@ import org.eclipse.ui.views.navigator.ResourceComparator;
 import org.eclipse.wst.server.core.IServerWorkingCopy;
 import org.eclipse.wst.server.core.ServerCore;
 import org.eclipse.wst.server.ui.wizard.IWizardHandle;
+import org.jboss.ide.eclipse.as.core.util.RegExUtils;
 import org.jboss.ide.eclipse.as.ui.UIUtil;
 import org.jboss.ide.eclipse.as.ui.editor.DeploymentTypeUIUtil;
 import org.jboss.ide.eclipse.as.ui.editor.IDeploymentTypeUI.IServerModeUICallback;
 import org.jboss.tools.common.ui.WizardUtils;
+import org.jboss.tools.openshift.egit.core.EGitUtils;
 import org.jboss.tools.openshift.express.internal.core.behaviour.ExpressServerUtils;
 import org.jboss.tools.openshift.express.internal.core.connection.Connection;
-import org.jboss.tools.openshift.express.internal.core.connection.ConnectionUtils;
-import org.jboss.tools.openshift.express.internal.core.connection.ConnectionsModel;
+import org.jboss.tools.openshift.express.internal.core.connection.ConnectionURL;
+import org.jboss.tools.openshift.express.internal.core.connection.ConnectionsModelSingleton;
 import org.jboss.tools.openshift.express.internal.ui.OpenShiftUIActivator;
-import org.jboss.tools.openshift.express.internal.ui.explorer.ConnectToOpenShiftWizard;
+import org.jboss.tools.openshift.express.internal.ui.utils.StringUtils;
 import org.jboss.tools.openshift.express.internal.ui.utils.UIUtils;
 import org.jboss.tools.openshift.express.internal.ui.viewer.ConnectionColumLabelProvider;
 import org.jboss.tools.openshift.express.internal.ui.wizard.application.ImportOpenShiftExpressApplicationWizard;
 import org.jboss.tools.openshift.express.internal.ui.wizard.application.OpenShiftExpressApplicationWizard;
+import org.jboss.tools.openshift.express.internal.ui.wizard.connection.ConnectToOpenShiftWizard;
 
 import com.openshift.client.IApplication;
 import com.openshift.client.IDomain;
@@ -102,7 +109,7 @@ public class ExpressDetailsComposite {
 	protected boolean showVerify, showImportLink;
 
 	// Data / Model
-	private String connectionUrl, app, remote, deployProject, deployFolder;
+	private String app, remote, deployProject, deployFolder;
 	private IApplication fapplication;
 	private Connection connection;
 	private IDomain fdomain;
@@ -134,14 +141,13 @@ public class ExpressDetailsComposite {
 	}
 
 	private void initModel() {
-		String connectionUrl = ExpressServerUtils.getExpressConnectionUrl(server);
-		if (ConnectionUtils.isDefaultHost(connectionUrl)) {
+		ConnectionURL connectionUrl = ExpressServerUtils.getExpressConnectionUrl(server);
+		if (connectionUrl == null) {
 			initModelNewServerWizard();
 			return;
 		}
 		
-		this.connectionUrl = connectionUrl;
-		this.connection = ConnectionsModel.getDefault().getConnectionByUrl(connectionUrl);
+		this.connection = ConnectionsModelSingleton.getInstance().getConnectionByUrl(connectionUrl);
 		this.app = ExpressServerUtils.getExpressApplicationName(server);
 		this.deployProject = ExpressServerUtils.getExpressDeployProject(server);
 		this.deployFolder = ExpressServerUtils.getExpressDeployFolder(server);
@@ -164,7 +170,7 @@ public class ExpressDetailsComposite {
 		} else {
 			// we may or may not have a user, clearly no app
 			if( tmpConnection == null )
-				tmpConnection = ConnectionsModel.getDefault().getRecentConnection();
+				tmpConnection = ConnectionsModelSingleton.getInstance().getRecentConnection();
 			updateModel(tmpConnection);
 		}
 
@@ -177,7 +183,7 @@ public class ExpressDetailsComposite {
 
 	/* Set widgets initial values */
 	private void fillWidgets() {
-		connectionComboViewer.setInput(ConnectionsModel.getDefault().getConnections());
+		connectionComboViewer.setInput(ConnectionsModelSingleton.getInstance().getConnections());
 		if (connection != null) {
 			selectComboConnection(connection);
 			connectionComboViewer.getControl().setEnabled(showVerify);
@@ -217,10 +223,11 @@ public class ExpressDetailsComposite {
 		this.deployProjectCombo.setItems(names);
 		if (names.length > 0) {
 			deployProjectCombo.select(0);
-			this.deployProject = names[0];
-			browseDestButton.setEnabled(true);
-		} else {
-			browseDestButton.setEnabled(false);
+			deployProjectChanged(names[0]);
+//			this.deployProject = names[0];
+//			browseDestButton.setEnabled(true);
+//		} else {
+//			browseDestButton.setEnabled(false);
 		}
 	}
 
@@ -272,6 +279,7 @@ public class ExpressDetailsComposite {
 		Label remoteLabel = new Label(composite, SWT.NONE);
 		GridDataFactory.fillDefaults().align(SWT.LEFT, SWT.CENTER).applyTo(remoteLabel);
 		remoteText = new Text(composite, SWT.SINGLE | SWT.BORDER);
+		remoteText.setEditable(false);
 		GridDataFactory.fillDefaults()
 				.span(2, 1).align(SWT.FILL, SWT.FILL).grab(true, false).applyTo(remoteText);
 
@@ -307,9 +315,9 @@ public class ExpressDetailsComposite {
 				if (WizardUtils.openWizardDialog(
 						wizard, connectionComboViewer.getControl().getShell()) == Window.OK) {
 					connectionComboViewer.getControl().setEnabled(true);
-					connectionComboViewer.setInput(ConnectionsModel.getDefault().getConnections());
+					connectionComboViewer.setInput(ConnectionsModelSingleton.getInstance().getConnections());
 					final Connection selectedConnection =
-							ConnectionsModel.getDefault().getRecentConnection();
+							ConnectionsModelSingleton.getInstance().getRecentConnection();
 					selectComboConnection(selectedConnection);
 				}
 			}
@@ -368,7 +376,8 @@ public class ExpressDetailsComposite {
 		if (deployProjectCombo != null) {
 			deployProjectModifyListener = new ModifyListener() {
 				public void modifyText(ModifyEvent e) {
-					deployProject = deployProjectCombo.getText();
+//					deployProject = deployProjectCombo.getText();
+					deployProjectChanged(deployProjectCombo.getText());
 				}
 			};
 			deployProjectCombo.addModifyListener(deployProjectModifyListener);
@@ -421,17 +430,44 @@ public class ExpressDetailsComposite {
 	}
 
 	private void deployProjectChanged(String deployProject) {
-		if (deployProject != null) {
+		if (!StringUtils.isEmpty(deployProject)) {
 			IProject depProj = ResourcesPlugin.getWorkspace().getRoot().getProject(deployProject);
 			if (depProj != null && depProj.isAccessible()) {
+				this.deployProject = deployProject;
+				remoteText.setText(getRemote(remote, fapplication, depProj));
 				String depFolder = ExpressServerUtils.getProjectAttribute(depProj,
 						ExpressServerUtils.SETTING_DEPLOY_FOLDER_NAME, null);
-				// ExpressServerUtils.ATTRIBUTE_DEPLOY_FOLDER_DEFAULT);
-				if (depFolder == null)
-					deployFolderText.setText(ExpressServerUtils.ATTRIBUTE_DEPLOY_FOLDER_DEFAULT);
+				if (depFolder != null) {
+					deployFolderText.setText(depFolder.toString());
+				} else {
+					deployFolderText.setText(ExpressServerUtils.ATTRIBUTE_DEPLOY_FOLDER_DEFAULT);	
+				}
 				deployFolderText.setEnabled(depFolder == null);
 				browseDestButton.setEnabled(depFolder == null);
 			}
+		} else {
+			deployFolderText.setEnabled(false);
+			browseDestButton.setEnabled(false);
+		}
+	}
+
+	private String getRemote(String remote, IApplication application, IProject project) {
+		try {
+			Repository repository = EGitUtils.getRepository(project);
+			if (repository == null) {
+				return null;
+			}
+			Pattern gitURIPattern = Pattern.compile(RegExUtils.escapeRegex(application.getGitUrl()));
+			RemoteConfig remoteConfig = EGitUtils.getRemoteByUrl(gitURIPattern, repository);
+			if (remoteConfig == null) {
+				return null;
+			}
+			return remoteConfig.getName();
+		} catch (CoreException e) {
+			OpenShiftUIActivator.log(
+					NLS.bind("Could not get remote pointing to {0} for project {1}", 
+							application.getGitUrl(),project.getName()), e);
+			return null;
 		}
 	}
 
@@ -550,7 +586,6 @@ public class ExpressDetailsComposite {
 		this.fapplication = application;
 		if (connection.isConnected()) {
 			this.connection = connection;
-			this.connectionUrl = connection.getUsername();
 		} else {
 			connection = null;
 		}
@@ -585,7 +620,7 @@ public class ExpressDetailsComposite {
 
 	public void finish(IProgressMonitor monitor) throws CoreException {
 		try {
-			ConnectionsModel.getDefault().addConnection(connection);
+			ConnectionsModelSingleton.getInstance().addConnection(connection);
 			connection.save();
 			fillServerWithDetails();
 			updateProjectSettings();

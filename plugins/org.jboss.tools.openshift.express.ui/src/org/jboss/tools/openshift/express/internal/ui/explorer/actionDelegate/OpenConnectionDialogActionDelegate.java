@@ -16,16 +16,15 @@ import org.eclipse.jface.viewers.IStructuredSelection;
 import org.eclipse.jface.window.Window;
 import org.eclipse.jface.wizard.IWizard;
 import org.eclipse.swt.widgets.Shell;
-import org.eclipse.ui.ISelectionService;
 import org.eclipse.ui.IViewActionDelegate;
 import org.eclipse.ui.IViewPart;
 import org.eclipse.ui.PlatformUI;
 import org.eclipse.ui.navigator.CommonNavigator;
 import org.jboss.tools.common.ui.WizardUtils;
 import org.jboss.tools.openshift.express.internal.core.connection.Connection;
-import org.jboss.tools.openshift.express.internal.core.connection.ConnectionsModel;
-import org.jboss.tools.openshift.express.internal.ui.explorer.ConnectToOpenShiftWizard;
+import org.jboss.tools.openshift.express.internal.core.connection.ConnectionsModelSingleton;
 import org.jboss.tools.openshift.express.internal.ui.utils.Logger;
+import org.jboss.tools.openshift.express.internal.ui.wizard.connection.ConnectToOpenShiftWizard;
 
 /**
  * @author Xavier Coulon
@@ -43,7 +42,7 @@ public class OpenConnectionDialogActionDelegate implements IViewActionDelegate {
 		if (returnCode == Window.OK) {
 			Logger.debug("OpenShift Auth succeeded.");
 			if (view != null) {
-				view.getCommonViewer().setInput(ConnectionsModel.getDefault());
+				view.getCommonViewer().setInput(ConnectionsModelSingleton.getInstance());
 			}
 		}
 

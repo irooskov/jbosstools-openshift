@@ -14,7 +14,6 @@ import java.lang.reflect.InvocationTargetException;
 import java.util.Collection;
 import java.util.List;
 
-import org.eclipse.core.databinding.AggregateValidationStatus;
 import org.eclipse.core.databinding.DataBindingContext;
 import org.eclipse.core.databinding.UpdateListStrategy;
 import org.eclipse.core.databinding.beans.BeanProperties;
@@ -688,7 +687,7 @@ public class ApplicationConfigurationWizardPage extends AbstractOpenShiftWizardP
 	 */
 	private boolean ensureHasDomain() {
 		try {
-			final Connection user = this.pageModel.getUser();
+			final Connection user = this.pageModel.getConnection();
 			if (user != null && !user.hasDomain()) {
 				IWizard domainDialog = new NewDomainDialog(user);
 				WizardDialog dialog = new WizardDialog(Display.getCurrent().getActiveShell(), domainDialog);

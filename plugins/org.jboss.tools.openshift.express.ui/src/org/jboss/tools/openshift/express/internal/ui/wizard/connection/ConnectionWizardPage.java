@@ -54,6 +54,7 @@ import org.jboss.tools.common.ui.WizardUtils;
 import org.jboss.tools.common.ui.databinding.InvertingBooleanConverter;
 import org.jboss.tools.common.ui.databinding.ParametrizableWizardPageSupport;
 import org.jboss.tools.common.ui.databinding.ValueBindingBuilder;
+import org.jboss.tools.openshift.egit.ui.util.EGitUIUtils;
 import org.jboss.tools.openshift.express.internal.core.connection.Connection;
 import org.jboss.tools.openshift.express.internal.ui.OpenShiftUIActivator;
 import org.jboss.tools.openshift.express.internal.ui.OpenshiftUIMessages;
@@ -62,7 +63,6 @@ import org.jboss.tools.openshift.express.internal.ui.databinding.RequiredStringV
 import org.jboss.tools.openshift.express.internal.ui.databinding.TrimmingStringConverter;
 import org.jboss.tools.openshift.express.internal.ui.explorer.AbstractLabelProvider;
 import org.jboss.tools.openshift.express.internal.ui.utils.Logger;
-import org.jboss.tools.openshift.express.internal.ui.utils.StringUtils;
 import org.jboss.tools.openshift.express.internal.ui.utils.UIUpdatingJob;
 import org.jboss.tools.openshift.express.internal.ui.viewer.ConnectionColumLabelProvider;
 import org.jboss.tools.openshift.express.internal.ui.viewer.NewConnectionAwareConnectionComparer;
@@ -79,14 +79,19 @@ public class ConnectionWizardPage extends AbstractOpenShiftWizardPage {
 	protected static final String OPENSHIFT_EXPRESS_SIGNUP_URL = "https://openshift.redhat.com/app/user/new/express"; //$NON-NLS-1$
 
 	private final ConnectionWizardPageModel pageModel;
-
-	private Text rhLoginText = null;
-	private Text passwordText = null;
+	private Text connectionCompositeUsernameText;
+	private Text connectionCompositePasswordText;
+	private Text passwordCompositePasswordText;
 
 	public ConnectionWizardPage(IWizard wizard, IConnectionAwareModel wizardModel) {
 		super("Sign in to OpenShift", "Please provide your OpenShift credentials.", "Server Connection",
 				wizard);
 		this.pageModel = new ConnectionWizardPageModel(wizardModel);
+		/*
+		 * JBIDE-12999: ensure EclipseAuthenticator is installed and overrides
+		 * NetAuthenticator
+		 */
+		EGitUIUtils.ensureEgitUIIsStarted();
 	}
 
 	protected void doCreateControls(Composite container, DataBindingContext dbc) {
@@ -140,8 +145,8 @@ public class ConnectionWizardPage extends AbstractOpenShiftWizardPage {
 				.span(2, 1).applyTo(connectionWidgetsContainer);
 		StackLayout stackLayout = new StackLayout();
 		connectionWidgetsContainer.setLayout(stackLayout);
-		Composite connectionWidgets = createConnectionWidgets(connectionWidgetsContainer, dbc);
-		Composite passwordWidgets = createPasswordWidgets(connectionWidgetsContainer, dbc);
+		Composite connectionWidgets = createNewConnectionComposite(connectionWidgetsContainer, dbc);
+		Composite passwordWidgets = createExistingConnectionComposite(connectionWidgetsContainer, dbc);
 
 		showConnectionWidgets(pageModel.isCreateNewConnection(), passwordWidgets, connectionWidgets, stackLayout,
 				connectionWidgetsContainer);
@@ -180,7 +185,7 @@ public class ConnectionWizardPage extends AbstractOpenShiftWizardPage {
 		container.layout();
 	}
 
-	private Composite createPasswordWidgets(Composite container, DataBindingContext dbc) {
+	private Composite createExistingConnectionComposite(Composite container, DataBindingContext dbc) {
 		Composite passwordWidgets = new Composite(container, SWT.NONE);
 		GridLayoutFactory.fillDefaults()
 				.numColumns(2).applyTo(passwordWidgets);
@@ -190,11 +195,11 @@ public class ConnectionWizardPage extends AbstractOpenShiftWizardPage {
 		passwordLabel.setText("&Password:");
 		GridDataFactory.fillDefaults()
 				.align(SWT.LEFT, SWT.CENTER).hint(100, SWT.DEFAULT).applyTo(passwordLabel);
-		passwordText = new Text(passwordWidgets, SWT.BORDER | SWT.PASSWORD);
+		this.passwordCompositePasswordText = new Text(passwordWidgets, SWT.BORDER | SWT.PASSWORD);
 		GridDataFactory.fillDefaults()
-				.align(SWT.FILL, SWT.CENTER).grab(true, false).applyTo(passwordText);
+				.align(SWT.FILL, SWT.CENTER).grab(true, false).applyTo(passwordCompositePasswordText);
 		Binding passwordBinding = ValueBindingBuilder
-				.bind(WidgetProperties.text(SWT.Modify).observe(passwordText))
+				.bind(WidgetProperties.text(SWT.Modify).observe(passwordCompositePasswordText))
 				.validatingAfterGet(new RequiredStringValidator("password"))
 				.to(BeanProperties.value(ConnectionWizardPageModel.PROPERTY_PASSWORD).observe(pageModel))
 				.in(dbc);
@@ -222,7 +227,7 @@ public class ConnectionWizardPage extends AbstractOpenShiftWizardPage {
 		return passwordWidgets;
 	}
 
-	private Composite createConnectionWidgets(Composite container, DataBindingContext dbc) {
+	private Composite createNewConnectionComposite(Composite container, DataBindingContext dbc) {
 		Composite connectionWidgets = new Composite(container, SWT.NONE);
 		GridLayoutFactory.fillDefaults()
 				.numColumns(2).applyTo(connectionWidgets);
@@ -237,29 +242,30 @@ public class ConnectionWizardPage extends AbstractOpenShiftWizardPage {
 				.to(BeanProperties.value(ConnectionWizardPageModel.PROPERTY_USE_DEFAULTSERVER).observe(pageModel))
 				.in(dbc);
 
-		// server
+		// host
 		Label serverLabel = new Label(connectionWidgets, SWT.NONE);
 		serverLabel.setText("&Server:");
 		GridDataFactory.fillDefaults()
 				.align(SWT.LEFT, SWT.CENTER).hint(100, SWT.DEFAULT).applyTo(serverLabel);
 		Combo serversCombo = new Combo(connectionWidgets, SWT.BORDER);
+		ComboViewer serverComboViewer = new ComboViewer(serversCombo);
+		serverComboViewer.setLabelProvider(new ServerLabelProvider());
+		serverComboViewer.setContentProvider(ArrayContentProvider.getInstance());
+		serverComboViewer.setInput(pageModel.getServers());
+		GridDataFactory.fillDefaults()
+				.align(SWT.FILL, SWT.CENTER).grab(true, false).applyTo(serversCombo);
+		IObservableValue serverObservable = WidgetProperties.text().observe(serversCombo);
 		Binding serverBinding = ValueBindingBuilder
-				.bind(WidgetProperties.text().observe(serversCombo))
-				.validatingAfterGet(new RequiredStringValidator("server"))
-				.to(BeanProperties.value(ConnectionWizardPageModel.PROPERTY_SERVER).observe(pageModel))
+				.bind(serverObservable)
+				.to(BeanProperties.value(ConnectionWizardPageModel.PROPERTY_HOST).observe(pageModel))
 				.in(dbc);
 		ControlDecorationSupport
 				.create(serverBinding, SWT.LEFT | SWT.TOP, null, new RequiredControlDecorationUpdater());
-		ComboViewer serversComboViewer = new ComboViewer(serversCombo);
-		serversComboViewer.setLabelProvider(new ServerLabelProvider());
-		serversComboViewer.setContentProvider(ArrayContentProvider.getInstance());
-		serversComboViewer.setInput(pageModel.getServers());
-		GridDataFactory.fillDefaults()
-				.align(SWT.FILL, SWT.CENTER).grab(true, false).applyTo(serversCombo);
-		ValueBindingBuilder
-				.bind(ViewerProperties.singlePostSelection().observe(serversComboViewer))
-				.to(BeanProperties.value(ConnectionWizardPageModel.PROPERTY_SERVER).observe(pageModel))
-				.in(dbc);
+		ValidationStatusProvider hostValidation = 
+				new RequiredStringValidationProvider(serverObservable, "server");
+		dbc.addValidationStatusProvider(hostValidation);
+		ControlDecorationSupport
+				.create(hostValidation, SWT.LEFT | SWT.TOP, null, new RequiredControlDecorationUpdater());
 		ValueBindingBuilder
 				.bind(WidgetProperties.enabled().observe(serversCombo))
 				.notUpdatingParticipant()
@@ -272,17 +278,17 @@ public class ConnectionWizardPage extends AbstractOpenShiftWizardPage {
 		rhLoginLabel.setText("&Username:");
 		GridDataFactory.fillDefaults()
 				.align(SWT.LEFT, SWT.CENTER).applyTo(rhLoginLabel);
-		rhLoginText = new Text(connectionWidgets, SWT.BORDER);
+		connectionCompositeUsernameText = new Text(connectionWidgets, SWT.BORDER);
 		GridDataFactory.fillDefaults()
-				.align(SWT.FILL, SWT.CENTER).grab(true, false).span(1, 1).applyTo(rhLoginText);
-				IObservableValue usernameObservable = WidgetProperties.text(SWT.Modify).observe(rhLoginText);
+				.align(SWT.FILL, SWT.CENTER).grab(true, false).applyTo(connectionCompositeUsernameText);
+				IObservableValue usernameObservable = WidgetProperties.text(SWT.Modify).observe(connectionCompositeUsernameText);
 				ValueBindingBuilder
 						.bind(usernameObservable)
 		 				.converting(new TrimmingStringConverter())
 				.to(BeanProperties.value(ConnectionWizardPageModel.PROPERTY_USERNAME).observe(pageModel))
 				.in(dbc);
-		ValidationStatusProvider usernameValidation = new RequiredStringValidationProvider(usernameObservable,
-				"username");
+		ValidationStatusProvider usernameValidation = 
+				new RequiredStringValidationProvider(usernameObservable, "username");
 		dbc.addValidationStatusProvider(usernameValidation);
 		ControlDecorationSupport
 				.create(usernameValidation, SWT.LEFT | SWT.TOP, null, new RequiredControlDecorationUpdater());
@@ -292,10 +298,10 @@ public class ConnectionWizardPage extends AbstractOpenShiftWizardPage {
 		passwordLabel.setText("&Password:");
 		GridDataFactory.fillDefaults()
 				.align(SWT.LEFT, SWT.CENTER).applyTo(passwordLabel);
-		passwordText = new Text(connectionWidgets, SWT.BORDER | SWT.PASSWORD);
+		this.connectionCompositePasswordText = new Text(connectionWidgets, SWT.BORDER | SWT.PASSWORD);
 		GridDataFactory.fillDefaults()
-				.align(SWT.FILL, SWT.CENTER).grab(true, false).applyTo(passwordText);
-				IObservableValue passwordObservable = WidgetProperties.text(SWT.Modify).observe(passwordText);
+				.align(SWT.FILL, SWT.CENTER).grab(true, false).applyTo(connectionCompositePasswordText);
+		IObservableValue passwordObservable = WidgetProperties.text(SWT.Modify).observe(connectionCompositePasswordText);
 		ValueBindingBuilder
 				.bind(passwordObservable)
 				.to(BeanProperties.value(ConnectionWizardPageModel.PROPERTY_PASSWORD).observe(pageModel))
@@ -339,12 +345,7 @@ public class ConnectionWizardPage extends AbstractOpenShiftWizardPage {
 	@Override
 	protected void onPageActivated(DataBindingContext dbc) {
 		super.onPageActivated(dbc);
-		if (StringUtils.isEmpty(pageModel.getUsername())
-				&& rhLoginText != null) {
-			rhLoginText.setFocus();
-		} else if (passwordText != null) {
-			passwordText.setFocus();
-		}
+		setInitialFocus();
 	}
 
 	@Override
@@ -354,15 +355,28 @@ public class ConnectionWizardPage extends AbstractOpenShiftWizardPage {
 		}
 		event.doit = connect();
 		if (!event.doit) {
-			passwordText.setFocus();
-			passwordText.selectAll();
+			setInitialFocus();
+		}
+	}
+	
+	private void setInitialFocus() {
+		if (pageModel.isCreateNewConnection()) {
+			if (connectionCompositeUsernameText.getText().isEmpty()) {
+				connectionCompositeUsernameText.setFocus();
+			} else {
+				connectionCompositePasswordText.setFocus();
+				connectionCompositePasswordText.selectAll();
+			}
+		} else {
+			passwordCompositePasswordText.setFocus();
+			passwordCompositePasswordText.selectAll();
 		}
 	}
 
 	public boolean connect() {
 		try {
-			WizardUtils.runInWizard(new ConnectJob(), new DelegatingProgressMonitor(), getContainer(),
-					getDatabindingContext());
+			WizardUtils.runInWizard(
+					new ConnectJob(), new DelegatingProgressMonitor(), getContainer(), getDatabindingContext());
 			return JobUtils.isOk(pageModel.getValid());
 		} catch (InterruptedException e) {
 			Logger.error("Failed to authenticate on OpenShift", e);
@@ -423,7 +437,7 @@ public class ConnectionWizardPage extends AbstractOpenShiftWizardPage {
 
 	}		
 
-		public Connection getConnection() {
+	public Connection getConnection() {
 		return pageModel.getConnection();
 	}
 

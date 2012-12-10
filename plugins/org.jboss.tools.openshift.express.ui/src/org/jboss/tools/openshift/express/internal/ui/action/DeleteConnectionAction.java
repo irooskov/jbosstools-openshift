@@ -12,7 +12,7 @@ package org.jboss.tools.openshift.express.internal.ui.action;
 
 import org.eclipse.jface.viewers.ITreeSelection;
 import org.jboss.tools.openshift.express.internal.core.connection.Connection;
-import org.jboss.tools.openshift.express.internal.core.connection.ConnectionsModel;
+import org.jboss.tools.openshift.express.internal.core.connection.ConnectionsModelSingleton;
 import org.jboss.tools.openshift.express.internal.ui.messages.OpenShiftExpressUIMessages;
 
 /**
@@ -28,9 +28,8 @@ public class DeleteConnectionAction extends AbstractAction {
 	public void run() {
 		if (selection instanceof ITreeSelection
 				&& ((ITreeSelection) selection).getFirstElement() instanceof Connection) {
-			final ITreeSelection treeSelection = (ITreeSelection) selection;
-			final Connection connection = (Connection) treeSelection.getFirstElement();
-			ConnectionsModel.getDefault().removeConnection(connection);
+			final Connection connection = (Connection) ((ITreeSelection) selection).getFirstElement();
+			ConnectionsModelSingleton.getInstance().removeConnection(connection);
 		}
 	}
 

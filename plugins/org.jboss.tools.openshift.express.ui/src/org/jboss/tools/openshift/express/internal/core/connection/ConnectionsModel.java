@@ -12,7 +12,6 @@ package org.jboss.tools.openshift.express.internal.core.connection;
 
 import java.io.UnsupportedEncodingException;
 import java.net.MalformedURLException;
-import java.net.URL;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
@@ -22,11 +21,13 @@ import java.util.Map.Entry;
 
 import org.eclipse.osgi.util.NLS;
 import org.jboss.tools.openshift.express.internal.ui.OpenShiftUIActivator;
+import org.jboss.tools.openshift.express.internal.ui.OpenShiftUIException;
 import org.jboss.tools.openshift.express.internal.ui.preferences.OpenShiftPreferences;
 import org.jboss.tools.openshift.express.internal.ui.wizard.connection.CredentialsPrompter;
 
 /**
  * @author Rob Stryker
+ * @author Andre Dietisheim
  */
 public class ConnectionsModel {
 
@@ -37,20 +38,12 @@ public class ConnectionsModel {
 	/** event that a connection was changed */
 	private static final int CHANGED = 2;
 
-	private static ConnectionsModel model;
-
-	public static ConnectionsModel getDefault() {
-		if (model == null)
-			model = new ConnectionsModel();
-		return model;
-	}
-
 	/** The most recent user connected on OpenShift. */
 	private Connection recentConnection = null;
-	private HashMap<String, Connection> allConnections = new HashMap<String, Connection>();
+	private HashMap<ConnectionURL, Connection> connectionsByUrl = new HashMap<ConnectionURL, Connection>();
 	private List<IConnectionsModelListener> listeners = new ArrayList<IConnectionsModelListener>();
 
-	private ConnectionsModel() {
+	protected ConnectionsModel() {
 		load();
 	}
 
@@ -62,44 +55,80 @@ public class ConnectionsModel {
 		listeners.remove(listener);
 	}
 
-	public void addConnection(Connection connection) {
-		try {
-			allConnections.put(ConnectionUtils.getUrlForConnection(connection), connection);
-			this.recentConnection = connection;
-			fireModelChange(connection, ADDED);
-		} catch (UnsupportedEncodingException e) {
-			OpenShiftUIActivator.log(
-					NLS.bind("Could not add connection {0}/{1}", connection.getUsername(), connection.getHost()),
-					e);
+	public void clear() {
+		Connection[] connections = connectionsByUrl.values().toArray(new Connection[connectionsByUrl.size()]);
+		for (Connection connection : connections) {
+			removeConnection(connection);
 		}
+	}
+
+	public boolean addConnection(Connection connection) {
+		try {
+			ConnectionURL connectionUrl = ConnectionURL.forConnection(connection);
+			return addConnection(connectionUrl, connection);
+		} catch (UnsupportedEncodingException e) {
+			throw new OpenShiftUIException(
+					e, "Could not add connection {0}/{1}", connection.getUsername(), connection.getHost());
+		} catch (MalformedURLException e) {
+			throw new OpenShiftUIException(
+					e, "Could not add connection {0}/{1}", connection.getUsername(), connection.getHost());
+		}
+	}
+
+	protected boolean addConnection(ConnectionURL connectionUrl, Connection connection) {
+		if (connectionsByUrl.containsKey(connectionUrl)) {
+			return false;
+		}
+		connectionsByUrl.put(connectionUrl, connection);
+		this.recentConnection = connection;
+		fireModelChange(connection, ADDED);
+		return true;
+	}
+
+	protected boolean addConnection(ConnectionURL connectionUrl) {
+		Connection connection =
+				new Connection(connectionUrl.getUsername(), connectionUrl.getScheme(), connectionUrl.getHost(), new CredentialsPrompter());
+		return addConnection(connectionUrl, connection);
 	}
 
 	public boolean hasConnection(Connection connection) {
 		try {
-			String url = ConnectionUtils.getUrlForConnection(connection);
-			return getConnectionByUrl(url) != null;
+			ConnectionURL connectionUrl = ConnectionURL.forConnection(connection);
+			return getConnectionByUrl(connectionUrl) != null;
 		} catch (UnsupportedEncodingException e) {
-			OpenShiftUIActivator.log(
+			throw new OpenShiftUIException(e,
 					NLS.bind("Could not get url for connection {0} - {1}", connection.getUsername(),
-							connection.getHost()), e);
-			return false;
+							connection.getHost()));
+		} catch (MalformedURLException e) {
+			throw new OpenShiftUIException(e,
+					NLS.bind("Could not get url for connection {0} - {1}", connection.getUsername(),
+							connection.getHost()));
 		}
 	}
 
+	// TODO: dont allow/require external trigger to changer notification
 	public void fireConnectionChanged(Connection connection) {
 		fireModelChange(connection, CHANGED);
 	}
 
-	public void removeConnection(Connection connection) {
+	public boolean removeConnection(Connection connection) {
 		try {
-			allConnections.remove(ConnectionUtils.getUrlForConnection(connection));
-			if (this.recentConnection == connection)
+			ConnectionURL connectionUrl = ConnectionURL.forConnection(connection);
+			if (!connectionsByUrl.containsKey(connectionUrl)) {
+				return false;
+			}
+			connectionsByUrl.remove(connectionUrl);
+			if (this.recentConnection == connection) {
 				this.recentConnection = null;
+			}
 			fireModelChange(connection, REMOVED);
+			return true;
 		} catch (UnsupportedEncodingException e) {
-			OpenShiftUIActivator.log(
-					NLS.bind("Could not remove connection {0} - {1}", connection.getUsername(), connection.getHost()),
-					e);
+			throw new OpenShiftUIException(e,
+					NLS.bind("Could not remove connection {0} - {1}", connection.getUsername(), connection.getHost()));
+		} catch (MalformedURLException e) {
+			throw new OpenShiftUIException(e,
+					NLS.bind("Could not remove connection {0} - {1}", connection.getUsername(), connection.getHost()));
 		}
 	}
 
@@ -128,40 +157,35 @@ public class ConnectionsModel {
 		return recentConnection;
 	}
 
-	public void setRecentUser(Connection connection) {
-		this.recentConnection = connection;
-	}
-
-	public Connection getConnectionByUrl(String url) {
-		if (url == null) {
+	public Connection getConnectionByUrl(ConnectionURL connectionUrl) {
+		if (connectionUrl == null) {
 			return null;
 		}
-		return allConnections.get(url);
+		return connectionsByUrl.get(connectionUrl);
 	}
 
-	public Connection getConnectionByUsernameAndHost(String username, String host) {
-		try {
-			return getConnectionByUrl(ConnectionUtils.getUrlForUsernameAndHost(username, host));
-		} catch (UnsupportedEncodingException e) {
-			OpenShiftUIActivator.log(NLS.bind("Could not get url for connection {0} - {1}", username, host), e);
-			return null;
-		}
-	}
-
+	/**
+	 * Returns the connection for the given username if it exists. The
+	 * connection must use the default host to match the query by username.
+	 * 
+	 * @param username
+	 *            the username that the connection must use
+	 * @return the connection with the given username that uses the default host
+	 * 
+	 * @see ConnectionUtils#getDefaultHostUrl()
+	 */
 	public Connection getConnectionByUsername(String username) {
 		try {
-			return getConnectionByUrl(ConnectionUtils.getUrlForUsername(username));
+			return getConnectionByUrl(ConnectionURL.forUsername(username));
 		} catch (UnsupportedEncodingException e) {
-			OpenShiftUIActivator.log(NLS.bind("Could not get url for connection {0}", username), e);
-			return null;
+			throw new OpenShiftUIException(NLS.bind("Could not get url for connection {0}", username), e);
 		} catch (MalformedURLException e) {
-			OpenShiftUIActivator.log(NLS.bind("Could not get url for connection {0}", username), e);
-			return null;
+			throw new OpenShiftUIException(NLS.bind("Could not get url for connection {0}", username), e);
 		}
 	}
 
 	public Connection[] getConnections() {
-		Collection<Connection> c = allConnections.values();
+		Collection<Connection> c = connectionsByUrl.values();
 		Connection[] rets = (Connection[]) c.toArray(new Connection[c.size()]);
 		return rets;
 	}
@@ -169,41 +193,82 @@ public class ConnectionsModel {
 	/**
 	 * Load the user list from preferences and secure storage
 	 */
-	private void load() {
-		String[] connections = OpenShiftPreferences.INSTANCE.getConnections();
-		for (int i = 0; i < connections.length; i++) {
-			Connection connection = null;
+	protected void load() {
+		addDefaultHostConnections(loadPersistedDefaultHosts());
+		addCustomHostConnections(loadPersistedCustomHosts());
+	}
+
+	private void addDefaultHostConnections(String[] usernames) {
+		for (String username : usernames) {
 			try {
-				URL connectionUrl = new URL(connections[i]);
-				connection = new Connection(connectionUrl, new CredentialsPrompter());
-				addConnection(connection);
+				ConnectionURL connectionUrl = ConnectionURL.forUsername(username);
+				addConnection(connectionUrl);
 			} catch (MalformedURLException e) {
-				OpenShiftUIActivator.log(NLS.bind("Could not add connection for {0}.", connections[i]), e);
+				OpenShiftUIActivator.log(NLS.bind("Could not add connection for {0}.", username), e);
 			} catch (UnsupportedEncodingException e) {
-				OpenShiftUIActivator.log(NLS.bind("Could not add connection for {0}.", connections[i]), e);
+				OpenShiftUIActivator.log(NLS.bind("Could not add connection for {0}.", username), e);
+			} catch (IllegalArgumentException e) {
+				OpenShiftUIActivator.log(NLS.bind("Could not add connection for {0}.", username), e);
 			}
 		}
+	}
+	protected String[] loadPersistedDefaultHosts() {
+		return OpenShiftPreferences.INSTANCE.getLegacyConnections();
+	}
+
+	private void addCustomHostConnections(String[] connectionUrls) {
+		for (String connectionUrlString : connectionUrls) {
+			try {
+				ConnectionURL connectionUrl = ConnectionURL.forURL(connectionUrlString);
+				addConnection(connectionUrl);
+			} catch (MalformedURLException e) {
+				OpenShiftUIActivator.log(NLS.bind("Could not add connection for {0}.", connectionUrlString), e);
+			} catch (UnsupportedEncodingException e) {
+				OpenShiftUIActivator.log(NLS.bind("Could not add connection for {0}.", connectionUrlString), e);
+			} catch (IllegalArgumentException e) {
+				OpenShiftUIActivator.log(NLS.bind("Could not add connection for {0}.", connectionUrlString), e);
+			}
+		}
+	}
+
+	protected String[] loadPersistedCustomHosts() {
+		return OpenShiftPreferences.INSTANCE.getConnections();
+	}
+
+	public int size() {
+		return connectionsByUrl.size();
 	}
 
 	/**
 	 * Save the user list to preferences and secure storage
 	 */
 	public void save() {
-		List<String> persistedConnections = new ArrayList<String>();
-		for (Entry<String, Connection> entry : allConnections.entrySet()) {
+		List<String> customHostConnections = new ArrayList<String>();
+		List<String> defaultHostConnections = new ArrayList<String>();
+		for (Entry<ConnectionURL, Connection> entry : connectionsByUrl.entrySet()) {
 			Connection connection = entry.getValue();
 			connection.save();
-			try {
-				persistedConnections.add(ConnectionUtils.getUrlForConnection(connection));
-			} catch (UnsupportedEncodingException e) {
-				OpenShiftUIActivator.log(
-						NLS.bind("Could not store connection {0}/{1}", connection.getUsername(), connection.getHost()),
-						e);
+			ConnectionURL connectionUrl = entry.getKey();
+			
+			if (connection.isDefaultHost()) {
+				defaultHostConnections.add(connection.getUsername());
+			} else {
+				customHostConnections.add(connectionUrl.toString());
 			}
 		}
 
-		OpenShiftPreferences.INSTANCE.saveConnections(
-				(String[]) persistedConnections.toArray(new String[persistedConnections.size()]));
+		saveCustomHostConnections(customHostConnections);
+		saveDefaultHostConnections(defaultHostConnections);
+	}
+	
+	protected void saveDefaultHostConnections(List<String> usernames) {
+		OpenShiftPreferences.INSTANCE.saveLegacyConnections(
+				(String[]) usernames.toArray(new String[usernames.size()]));
 	}
 
+	protected void saveCustomHostConnections(List<String> connectionUrls) {
+		OpenShiftPreferences.INSTANCE.saveConnections(
+				(String[]) connectionUrls.toArray(new String[connectionUrls.size()]));
+	}
+	
 }
